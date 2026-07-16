@@ -1,0 +1,9 @@
+# Runtime files are installed under %LOCALAPPDATA%\BaiduMediaGuard.
+config.json
+baseline.json
+guard.log
+guard.log.old
+
+# Local test artifacts.
+*.tmp
+*.bak
