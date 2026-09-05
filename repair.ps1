@@ -8,10 +8,10 @@ $guard = Join-Path $PSScriptRoot 'BaiduMediaGuard.ps1'
 
 try {
     if ([string]::IsNullOrWhiteSpace($PlayerPath)) {
-        & $guard -VideoOnly
+        & $guard
     }
     else {
-        & $guard -VideoOnly -PlayerPath $PlayerPath
+        & $guard -PlayerPath $PlayerPath
     }
 }
 catch {

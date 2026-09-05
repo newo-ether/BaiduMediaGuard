@@ -75,3 +75,4 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host ('PASS: {0} PowerShell scripts parsed; UTF-8 BOM and portability checks passed.' -f $scripts.Count) -ForegroundColor Green
+& (Join-Path $PSScriptRoot 'Test-PlayerCleanup.ps1')

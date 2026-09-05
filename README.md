@@ -5,6 +5,7 @@
 它会：
 
 - 删除 `BaiduNetdiskImageViewerAssociations` 及图片查看器模块；
+- 清除新版“智能播放器”的启动程序、专用资源及更新包；
 - 将百度声明的全部视频格式恢复到用户自行选择的播放器；
 - 清理百度在 `RegisteredApplications` 和 `OpenWithProgids` 中的媒体入口；
 - 登录时以及每隔一段时间自动检查；
@@ -61,6 +62,26 @@
 %LOCALAPPDATA%\BaiduMediaGuard\guard.log
 ```
 
+## 清理范围
+
+支持旧版 `BaiduNetdiskUniteAssociations`、新版 `BaiduNetdiskPlayerAssociations`，
+以及 `Applications\BaiduNetdiskPlayer.open` 和对应播放器可执行文件的打开方式。
+清理前收集格式声明、当前默认项及打开方式列表，再将视频格式恢复到配置的播放器。
+同时移除这些组件在当前用户下的默认应用注册、ProgID、OpenWith 列表和关联提示。
+图片继续使用已保存的基线恢复；未被目标组件接管的图片、音频和 URL 默认项保持原状。
+
+安装位置从百度网盘注册信息发现。图片模块覆盖安装目录与 AppData 中的
+`module\ImageViewer`。新版播放器仅删除 `module\BrowserEngine` 下的
+`BaiduNetdiskPlayerLaunch.exe`、`resources\video_player.asar`、
+`resources\BaiduNetdiskPlayer.ico`、`module\asar\video_player.asar.new` 和
+`module\asar\video_player.asar.sig`。保留网盘主程序、共用 BrowserEngine、
+`localplayer.dll`、`vastplayer.dll` 和用户文件；不递归删除共用目录或播放器未知数据目录。
+
+删除前校验绝对路径边界并拒绝目录联接/符号链接。仅允许停止安装路径匹配的专用组件进程；
+共用 `BaiduNetdiskUnite.exe` 还必须明确以 `--mode=video_player` 启动。
+默认项修复或模块清理失败时保留组件注册供下次重试；文件占用、权限不足或注册清理失败会记录错误并返回失败。
+不会自动提权或修改权限。百度更新重新释放组件后，后续定时检查会再次清理。
+
 ## 第三方组件
 
 `SFTA.ps1` 来自 [DanysysTeam/PS-SFTA](https://github.com/DanysysTeam/PS-SFTA)，使用 MIT License。详情见 `THIRD_PARTY_NOTICES.txt`。
@@ -68,6 +89,7 @@
 ## 开发检查
 
 项目包含 Windows PowerShell 5.1 语法检查、机器相关硬编码检查，以及 UTF-8 BOM 检查：含非 ASCII 文案的 PowerShell 脚本必须带 BOM，纯 ASCII 脚本不强制。
+行为测试使用隔离的注册表与临时文件，覆盖关联恢复、组件删除、进程筛选、文件锁、目录联接和重复运行；不会调用真实的默认应用设置或停止真实进程。
 
 ```powershell
 .\tests\Test-Project.ps1

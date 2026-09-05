@@ -38,7 +38,12 @@ $SftaPath = Join-Path $PSScriptRoot 'SFTA.ps1'
 $HiddenLauncherPath = Join-Path $PSScriptRoot 'RunGuardHidden.vbs'
 
 $BaiduImageProgId = 'BaiduNetdiskImageViewerAssociations'
-$BaiduVideoProgId = 'BaiduNetdiskUniteAssociations'
+$BaiduVideoApplications = @('BaiduNetdiskUnite', 'BaiduNetdiskPlayer')
+$BaiduVideoProgIds = @(
+    'BaiduNetdiskUniteAssociations', 'BaiduNetdiskPlayerAssociations',
+    'Applications\BaiduNetdiskUnite.exe', 'Applications\BaiduNetdiskPlayer.open',
+    'Applications\BaiduNetdiskPlayerLaunch.exe', 'Applications\BaiduNetdiskPlayer.exe'
+)
 
 # Dot-source in script scope so Set-FTA and Remove-FTA remain visible to all
 # repair functions. Loading the helper itself does not modify the registry.
@@ -132,7 +137,7 @@ function Get-BaiduUserChoices {
         Get-ChildItem -LiteralPath $base -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $progId = (Get-ItemProperty -LiteralPath (Join-Path $_.PSPath 'UserChoice') -Name ProgId -ErrorAction SilentlyContinue).ProgId
-                if ($progId -match '^BaiduNetdisk.*Associations$') {
+                if ($progId -eq $BaiduImageProgId -or $progId -in $BaiduVideoProgIds) {
                     [pscustomobject]@{
                         Extension = $_.PSChildName.ToLowerInvariant()
                         ProgId = $progId
@@ -174,7 +179,7 @@ function Save-ImageBaseline {
         }
 
         $progId = Get-CurrentProgId -Extension $extension
-        if ($progId -and $progId -notmatch '^BaiduNetdisk.*Associations$') {
+        if ($progId -and $progId -notmatch '^BaiduNetdisk.*Associations$' -and $progId -notin $BaiduVideoProgIds) {
             $map[$extension] = $progId
         }
     }
@@ -298,24 +303,205 @@ function Remove-RegistryValueIfPresent {
 function Remove-BaiduOpenWithEntries {
     param(
         [Parameter(Mandatory = $true)][string[]]$Extensions,
-        [Parameter(Mandatory = $true)][string]$ProgId
+        [Parameter(Mandatory = $true)][string[]]$ProgIds
     )
 
     $removed = 0
     foreach ($extension in $Extensions) {
         $paths = @(
-            ('HKCU:\Software\Classes\{0}\OpenWithProgids' -f $extension),
-            ('HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{0}\OpenWithProgids' -f $extension)
+            ('HKCU:\Software\Classes\{0}' -f $extension),
+            ('HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{0}' -f $extension)
         )
 
         foreach ($path in $paths) {
-            $removed += Remove-RegistryValueIfPresent -Path $path -Name $ProgId
+            foreach ($progId in $ProgIds) {
+                $removed += Remove-RegistryValueIfPresent -Path ($path + '\OpenWithProgids') -Name $progId
+            }
+            $listPath = $path + '\OpenWithList'
+            $list = Get-Item -LiteralPath $listPath -ErrorAction SilentlyContinue
+            if ($null -ne $list) {
+                $mru = [string]$list.GetValue('MRUList')
+                $originalMru = $mru
+                foreach ($name in $list.GetValueNames()) {
+                    if ($name -ne 'MRUList' -and ('Applications\' + $list.GetValue($name)) -in $ProgIds) {
+                        $removed += Remove-RegistryValueIfPresent -Path $listPath -Name $name
+                        $mru = $mru.Replace($name, '')
+                    }
+                }
+                if ($mru -ne $originalMru) {
+                    Set-ItemProperty -LiteralPath $listPath -Name MRUList -Value $mru
+                }
+                foreach ($progId in @($ProgIds | Where-Object { $_.StartsWith('Applications\') })) {
+                    $removed += Remove-RegistryTreeIfPresent -Path ($listPath + '\' + $progId.Substring(13))
+                }
+            }
+            $key = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+            if ($null -ne $key -and $key.GetValue('') -in $ProgIds) {
+                $writable = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key.Name.Substring('HKEY_CURRENT_USER\'.Length), $true)
+                try {
+                    if ($writable.GetValue('') -in $ProgIds) {
+                        $writable.DeleteValue('')
+                        $removed++
+                    }
+                }
+                finally { $writable.Dispose() }
+            }
         }
 
         $toastPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts'
-        $removed += Remove-RegistryValueIfPresent -Path $toastPath -Name ($ProgId + '_' + $extension)
+        foreach ($progId in $ProgIds) {
+            $removed += Remove-RegistryValueIfPresent -Path $toastPath -Name ($progId + '_' + $extension)
+        }
     }
 
+    return $removed
+}
+
+function Get-BaiduVideoExtensions {
+    # Read the entire footprint before deleting any registration, including formats
+    # that exist only in OpenWith or as a Classes fallback (without UserChoice).
+    $KnownVideoExtensions
+    foreach ($application in $BaiduVideoApplications) {
+        Get-CapabilityExtensions -Path ('HKCU:\Software\Baidu\' + $application + '\Capabilities\FileAssociations')
+    }
+    foreach ($root in @('HKCU:\Software\Classes', 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts')) {
+        Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSChildName -match '^\.[^\\/]+$' } | ForEach-Object {
+                $extension = $_
+                $owned = $extension.GetValue('') -in $BaiduVideoProgIds
+                foreach ($child in @('UserChoice', 'OpenWithProgids', 'OpenWithList')) {
+                    $key = Get-Item -LiteralPath ($extension.PSPath + '\' + $child) -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { continue }
+                    foreach ($name in $key.GetValueNames()) {
+                        $value = $key.GetValue($name)
+                        if ($name -in $BaiduVideoProgIds -or $value -in $BaiduVideoProgIds -or
+                            ('Applications\' + $value) -in $BaiduVideoProgIds) { $owned = $true }
+                    }
+                    foreach ($name in $key.GetSubKeyNames()) {
+                        if (('Applications\' + $name) -in $BaiduVideoProgIds) { $owned = $true }
+                    }
+                }
+                if ($owned) { $extension.PSChildName.ToLowerInvariant() }
+            }
+    }
+    $toast = Get-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts' -ErrorAction SilentlyContinue
+    if ($null -ne $toast) {
+        foreach ($name in $toast.GetValueNames()) {
+            foreach ($progId in $BaiduVideoProgIds) {
+                if ($name.StartsWith($progId + '_.', [StringComparison]::OrdinalIgnoreCase)) {
+                    $name.Substring($progId.Length + 1)
+                }
+            }
+        }
+    }
+}
+
+function Get-BaiduInstallRoots {
+    $candidates = @(
+        foreach ($hive in @('HKCU:\Software', 'HKLM:\SOFTWARE', 'HKLM:\SOFTWARE\WOW6432Node')) {
+            (Get-ItemProperty -LiteralPath ($hive + '\Baidu\BaiduYunGuanjia') -Name installDir -ErrorAction SilentlyContinue).installDir
+        }
+        foreach ($progId in @($BaiduImageProgId) + $BaiduVideoProgIds) {
+            $key = Get-Item -LiteralPath ('HKCU:\Software\Classes\' + $progId + '\shell\open\command') -ErrorAction SilentlyContinue
+            if ($null -ne $key -and [string]$key.GetValue('') -match '^"?(.+?)\\module\\(?:BrowserEngine|ImageViewer)\\[^\\"]+\.exe(?:"|\s|$)') {
+                $Matches[1]
+            }
+        }
+    )
+    foreach ($candidate in @($candidates | Where-Object { $_ } | Sort-Object -Unique)) {
+        $path = [Environment]::ExpandEnvironmentVariables(([string]$candidate).Trim('"'))
+        if ($path -notmatch '^(?:[a-zA-Z]:\\|\\\\[^\\]+\\[^\\]+\\)') { continue }
+        $path = [IO.Path]::GetFullPath($path).TrimEnd('\')
+        if (Test-Path -LiteralPath (Join-Path $path 'BaiduNetdisk.exe') -PathType Leaf) { $path }
+    }
+}
+
+function Resolve-BaiduCleanupPath {
+    param([string]$Root, [string]$RelativePath)
+
+    $base = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $path = [IO.Path]::GetFullPath((Join-Path $base $RelativePath))
+    if (-not $path.StartsWith($base, [StringComparison]::OrdinalIgnoreCase) -or $path -eq $base.TrimEnd('\')) {
+        throw "Cleanup target escapes root: $path"
+    }
+    # Reject links in both the target and its ancestors, before any traversal.
+    $ancestor = $path
+    while ($ancestor) {
+        $item = Get-Item -LiteralPath $ancestor -Force -ErrorAction SilentlyContinue
+        if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Refusing reparse point: $ancestor"
+        }
+        $ancestor = Split-Path -Path $ancestor -Parent
+    }
+    return $path
+}
+
+function Remove-BaiduModuleTarget {
+    param([string]$Root, [string]$RelativePath)
+
+    $path = Resolve-BaiduCleanupPath -Root $Root -RelativePath $RelativePath
+    if (-not (Test-Path -LiteralPath $path)) { return 0 }
+    # Inspect one directory at a time so a nested junction is never traversed.
+    $pending = New-Object 'System.Collections.Generic.Queue[string]'
+    $pending.Enqueue($path)
+    while ($pending.Count -gt 0) {
+        $item = Get-Item -LiteralPath $pending.Dequeue() -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing reparse point: $($item.FullName)" }
+        if ($item.PSIsContainer) {
+            foreach ($child in Get-ChildItem -LiteralPath $item.FullName -Force) { $pending.Enqueue($child.FullName) }
+        }
+    }
+    Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $path) { throw "Cleanup target remains: $path" }
+    Write-GuardLog ('Removed component: ' + $path)
+    return 1
+}
+
+function Remove-BaiduModules {
+    param([bool]$RemoveImage, [bool]$RemoveVideo, [string[]]$InstallRoots,
+        [System.Collections.Generic.List[string]]$Failures)
+
+    $removed = 0
+    $targets = @(
+        foreach ($root in $InstallRoots) {
+            if ($RemoveImage) { [pscustomobject]@{ Root = $root; RelativePath = 'module\ImageViewer' } }
+            if ($RemoveVideo) {
+                foreach ($file in @('BaiduNetdiskPlayerLaunch.exe', 'resources\video_player.asar',
+                    'resources\BaiduNetdiskPlayer.ico', 'module\asar\video_player.asar.new', 'module\asar\video_player.asar.sig')) {
+                    [pscustomobject]@{ Root = $root; RelativePath = 'module\BrowserEngine\' + $file }
+                }
+            }
+        }
+        if ($RemoveImage) { [pscustomobject]@{ Root = $env:APPDATA; RelativePath = 'baidu\BaiduNetdisk\module\ImageViewer' } }
+    )
+    try {
+        $imageExecutables = @($targets | Where-Object { $_.RelativePath.EndsWith('\ImageViewer') } | ForEach-Object {
+            Resolve-BaiduCleanupPath $_.Root ($_.RelativePath + '\BaiduNetdiskImageViewer.exe')
+        })
+        $launchers = @()
+        $engines = @()
+        if ($RemoveVideo) {
+            $launchers = @($InstallRoots | ForEach-Object { Resolve-BaiduCleanupPath $_ 'module\BrowserEngine\BaiduNetdiskPlayerLaunch.exe' })
+            $engines = @($InstallRoots | ForEach-Object { Resolve-BaiduCleanupPath $_ 'module\BrowserEngine\BaiduNetdiskUnite.exe' })
+        }
+        foreach ($process in Get-CimInstance Win32_Process -Filter "Name = 'BaiduNetdiskPlayerLaunch.exe' OR Name = 'BaiduNetdiskUnite.exe' OR Name = 'BaiduNetdiskImageViewer.exe'") {
+            # Keep quoted file paths together: a filename containing the mode
+            # text must never identify a shared engine as a player process.
+            $modes = @([regex]::Matches([string]$process.CommandLine, '(?:[^\s"]+|"[^"]*")+') |
+                ForEach-Object { $_.Value.Trim('"') } | Where-Object { $_ -clike '--mode=*' })
+            $playerMode = $modes.Count -eq 1 -and $modes[0] -ceq '--mode=video_player'
+            if ($process.ExecutablePath -in $imageExecutables -or $process.ExecutablePath -in $launchers -or
+                ($process.ExecutablePath -in $engines -and $playerMode)) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+                Write-GuardLog ('Stopped component process: {0} ({1})' -f $process.ExecutablePath, $process.ProcessId)
+            }
+        }
+    }
+    catch { $Failures.Add(('Component process cleanup: ' + $_.Exception.Message)) }
+    foreach ($target in $targets) {
+        try { $removed += Remove-BaiduModuleTarget -Root $target.Root -RelativePath $target.RelativePath }
+        catch { $Failures.Add(('Component {0}: {1}' -f (Join-Path $target.Root $target.RelativePath), $_.Exception.Message)) }
+    }
     return $removed
 }
 
@@ -335,29 +521,31 @@ function Remove-BaiduRegistrations {
         $removed += Remove-RegistryTreeIfPresent -Path 'HKCU:\Software\Baidu\BaiduNetdiskImageViewer\Capabilities'
         $removed += Remove-RegistryTreeIfPresent -Path ('HKCU:\Software\Classes\' + $BaiduImageProgId)
         $removed += Remove-RegistryTreeIfPresent -Path 'HKCU:\Software\Classes\Applications\BaiduNetdiskImageViewer.exe'
-        $removed += Remove-BaiduOpenWithEntries -Extensions $ImageExtensions -ProgId $BaiduImageProgId
-
-        $imageViewerPath = Join-Path $env:APPDATA 'baidu\BaiduNetdisk\module\ImageViewer'
-        if (Test-Path -LiteralPath $imageViewerPath) {
-            try {
-                Remove-Item -LiteralPath $imageViewerPath -Recurse -Force
-                $removed++
-            }
-            catch {
-                Write-GuardLog ('Could not remove ImageViewer module: {0}' -f $_.Exception.Message)
-            }
-        }
+        $removed += Remove-BaiduOpenWithEntries -Extensions $ImageExtensions -ProgIds @($BaiduImageProgId, 'Applications\BaiduNetdiskImageViewer.exe')
     }
 
     if ($RemoveVideo) {
-        $removed += Remove-RegistryValueIfPresent -Path $registeredApplications -Name 'BaiduNetdiskUnite'
-        $removed += Remove-RegistryTreeIfPresent -Path 'HKCU:\Software\Baidu\BaiduNetdiskUnite\Capabilities'
-        $removed += Remove-RegistryTreeIfPresent -Path ('HKCU:\Software\Classes\' + $BaiduVideoProgId)
-        $removed += Remove-RegistryTreeIfPresent -Path 'HKCU:\Software\Classes\Applications\BaiduNetdiskUnite.exe'
-        $removed += Remove-BaiduOpenWithEntries -Extensions $VideoExtensions -ProgId $BaiduVideoProgId
+        foreach ($application in $BaiduVideoApplications) {
+            $removed += Remove-RegistryValueIfPresent -Path $registeredApplications -Name $application
+            $removed += Remove-RegistryTreeIfPresent -Path ('HKCU:\Software\Baidu\' + $application + '\Capabilities')
+        }
+        foreach ($progId in $BaiduVideoProgIds) {
+            $removed += Remove-RegistryTreeIfPresent -Path ('HKCU:\Software\Classes\' + $progId)
+        }
+        $removed += Remove-BaiduOpenWithEntries -Extensions $VideoExtensions -ProgIds $BaiduVideoProgIds
     }
 
     return $removed
+}
+
+function Send-AssociationChange {
+    if (-not ('BaiduMediaGuard.Shell' -as [type])) {
+        Add-Type -Namespace BaiduMediaGuard -Name Shell -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shell32.dll")]
+public static extern void SHChangeNotify(int eventId, uint flags, System.IntPtr item1, System.IntPtr item2);
+'@
+    }
+    [BaiduMediaGuard.Shell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
 }
 
 function Invoke-Repair {
@@ -373,8 +561,8 @@ function Invoke-Repair {
     }
 
     $imageCapabilityPath = 'HKCU:\Software\Baidu\BaiduNetdiskImageViewer\Capabilities\FileAssociations'
-    $videoCapabilityPath = 'HKCU:\Software\Baidu\BaiduNetdiskUnite\Capabilities\FileAssociations'
     $hijacks = @(Get-BaiduUserChoices)
+    $installRoots = @(Get-BaiduInstallRoots | Sort-Object -Unique)
 
     $imageExtensions = @(
         $KnownImageExtensions +
@@ -383,9 +571,8 @@ function Invoke-Repair {
             Sort-Object -Unique
     )
     $videoExtensions = @(
-        $KnownVideoExtensions +
-        (Get-CapabilityExtensions -Path $videoCapabilityPath) +
-        @($hijacks | Where-Object { $_.ProgId -eq $BaiduVideoProgId } | ForEach-Object { $_.Extension }) |
+        Get-BaiduVideoExtensions |
+            Where-Object { $_ -match '^\.[^\\/]+$' } |
             Sort-Object -Unique
     )
 
@@ -463,26 +650,41 @@ function Invoke-Repair {
         }
     }
 
-    $registrationsRemoved = Remove-BaiduRegistrations `
-        -RemoveImage $RepairImage `
-        -RemoveVideo $RepairVideo `
-        -ImageExtensions $imageExtensions `
-        -VideoExtensions $videoExtensions
+    $registrationsRemoved = 0
+    $modulesRemoved = 0
+    # Preserve discovery evidence if defaults could not be repaired this time.
+    if ($failures.Count -eq 0) {
+        $modulesRemoved = Remove-BaiduModules -RemoveImage $RepairImage -RemoveVideo $RepairVideo -InstallRoots $installRoots -Failures $failures
+        if ($failures.Count -eq 0) {
+            try {
+                $registrationsRemoved = Remove-BaiduRegistrations `
+                    -RemoveImage $RepairImage `
+                    -RemoveVideo $RepairVideo `
+                    -ImageExtensions $imageExtensions `
+                    -VideoExtensions $videoExtensions
+            }
+            catch { $failures.Add(('Registration cleanup: ' + $_.Exception.Message)) }
+        }
+    }
 
     $remaining = @(
         Get-BaiduUserChoices | Where-Object {
             ($RepairImage -and $_.ProgId -eq $BaiduImageProgId) -or
-            ($RepairVideo -and $_.ProgId -eq $BaiduVideoProgId)
+            ($RepairVideo -and $_.ProgId -in $BaiduVideoProgIds)
         }
     )
     foreach ($item in $remaining) {
         $failures.Add(('Remaining hijack {0}: {1}' -f $item.Extension, $item.ProgId))
     }
+    if ($registrationsRemoved -gt 0 -or $modulesRemoved -gt 0) {
+        try { Send-AssociationChange }
+        catch { $failures.Add(('Shell association refresh: ' + $_.Exception.Message)) }
+    }
 
-    $summary = 'Image restored: {0}; video restored: {1}; Baidu registrations removed: {2}; remaining Baidu defaults: {3}' -f `
-        $imageChanged, $videoChanged, $registrationsRemoved, $remaining.Count
+    $summary = 'Image restored: {0}; video restored: {1}; Baidu registrations removed: {2}; remaining Baidu defaults: {3}; components removed: {4}; failures: {5}' -f `
+        $imageChanged, $videoChanged, $registrationsRemoved, $remaining.Count, $modulesRemoved, $failures.Count
 
-    if (($imageChanged + $videoChanged + $registrationsRemoved) -gt 0 -or $failures.Count -gt 0) {
+    if (($imageChanged + $videoChanged + $registrationsRemoved + $modulesRemoved) -gt 0 -or $failures.Count -gt 0) {
         Write-GuardLog $summary
         foreach ($failure in $failures) {
             Write-GuardLog ('ERROR ' + $failure)
