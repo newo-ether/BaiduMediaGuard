@@ -65,7 +65,7 @@
 ## 清理范围
 
 支持旧版 `BaiduNetdiskUniteAssociations`、新版 `BaiduNetdiskPlayerAssociations`，
-以及 `Applications\BaiduNetdiskPlayer.open` 和对应播放器可执行文件的打开方式。
+以及 `Applications\BaiduNetdiskUnite.open`、`Applications\BaiduNetdiskPlayer.open` 和对应播放器可执行文件的打开方式。
 清理前收集格式声明、当前默认项及打开方式列表，再将视频格式恢复到配置的播放器。
 仅出现在 OpenWith/最近打开历史中的非视频格式只清理百度入口，不改变默认程序。
 同时移除这些组件在当前用户下的默认应用注册、ProgID、OpenWith 列表和关联提示。

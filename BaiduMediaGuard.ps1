@@ -41,7 +41,8 @@ $BaiduImageProgId = 'BaiduNetdiskImageViewerAssociations'
 $BaiduVideoApplications = @('BaiduNetdiskUnite', 'BaiduNetdiskPlayer')
 $BaiduVideoProgIds = @(
     'BaiduNetdiskUniteAssociations', 'BaiduNetdiskPlayerAssociations',
-    'Applications\BaiduNetdiskUnite.exe', 'Applications\BaiduNetdiskPlayer.open',
+    'Applications\BaiduNetdiskUnite.exe', 'Applications\BaiduNetdiskUnite.open',
+    'Applications\BaiduNetdiskPlayer.open',
     'Applications\BaiduNetdiskPlayerLaunch.exe', 'Applications\BaiduNetdiskPlayer.exe'
 )
 
