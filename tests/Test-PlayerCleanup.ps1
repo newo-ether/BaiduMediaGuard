@@ -3,7 +3,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $testId = [guid]::NewGuid().ToString('N')
-$testRoot = Join-Path $env:TEMP ('BaiduMediaGuard.Tests.' + $testId)
+# TEMP may use an 8.3 alias; match the normalized paths returned by discovery.
+$testRoot = [IO.Path]::GetFullPath((Join-Path $env:TEMP ('BaiduMediaGuard.Tests.' + $testId)))
 $registryBase = 'Software\BaiduMediaGuard.Tests.' + $testId
 $registryRoot = 'Registry::HKEY_CURRENT_USER\' + $registryBase
 $originalAppData = $env:APPDATA
