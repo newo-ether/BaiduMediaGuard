@@ -287,12 +287,12 @@ function Remove-RegistryValueIfPresent {
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
+    $key = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -eq $key) {
         return 0
     }
 
-    $property = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
-    if ($null -ne $property) {
+    if ($null -ne $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)) {
         Remove-ItemProperty -LiteralPath $Path -Name $Name -Force
         return 1
     }
@@ -314,8 +314,14 @@ function Remove-BaiduOpenWithEntries {
         )
 
         foreach ($path in $paths) {
-            foreach ($progId in $ProgIds) {
-                $removed += Remove-RegistryValueIfPresent -Path ($path + '\OpenWithProgids') -Name $progId
+            $progIdPath = $path + '\OpenWithProgids'
+            $progIdKey = Get-Item -LiteralPath $progIdPath -ErrorAction SilentlyContinue
+            if ($null -ne $progIdKey) {
+                foreach ($name in $progIdKey.GetValueNames()) {
+                    if ($name -in $ProgIds) {
+                        $removed += Remove-RegistryValueIfPresent -Path $progIdPath -Name $name
+                    }
+                }
             }
             $listPath = $path + '\OpenWithList'
             $list = Get-Item -LiteralPath $listPath -ErrorAction SilentlyContinue
@@ -331,8 +337,10 @@ function Remove-BaiduOpenWithEntries {
                 if ($mru -ne $originalMru) {
                     Set-ItemProperty -LiteralPath $listPath -Name MRUList -Value $mru
                 }
-                foreach ($progId in @($ProgIds | Where-Object { $_.StartsWith('Applications\') })) {
-                    $removed += Remove-RegistryTreeIfPresent -Path ($listPath + '\' + $progId.Substring(13))
+                foreach ($name in $list.GetSubKeyNames()) {
+                    if (('Applications\' + $name) -in $ProgIds) {
+                        $removed += Remove-RegistryTreeIfPresent -Path ($listPath + '\' + $name)
+                    }
                 }
             }
             $key = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
@@ -348,9 +356,19 @@ function Remove-BaiduOpenWithEntries {
             }
         }
 
-        $toastPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts'
-        foreach ($progId in $ProgIds) {
-            $removed += Remove-RegistryValueIfPresent -Path $toastPath -Name ($progId + '_' + $extension)
+    }
+    # Inspect existing toast names once, rather than repeatedly asking the
+    # provider for hundreds of absent properties on a potentially large key.
+    $toastPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts'
+    $toast = Get-Item -LiteralPath $toastPath -ErrorAction SilentlyContinue
+    if ($null -ne $toast) {
+        foreach ($name in $toast.GetValueNames()) {
+            foreach ($progId in $ProgIds) {
+                if ($name.StartsWith($progId + '_.', [StringComparison]::OrdinalIgnoreCase) -and
+                    $name.Substring($progId.Length + 1) -in $Extensions) {
+                    $removed += Remove-RegistryValueIfPresent -Path $toastPath -Name $name
+                }
+            }
         }
     }
 

@@ -120,6 +120,7 @@ try {
     Set-TestValue ($classes + '\.fallback') 'PerceivedType' 'video'
     Set-TestValue ($classes + '\.openonly\OpenWithProgids') $newProgId ''
     Set-TestValue ($classes + '\.openonly\OpenWithProgids') 'Other.Keep' ''
+    Set-TestValue ($classes + '\.openonly\OpenWithProgids') 'Applications\BaiduNetdiskPlayer.open' ([byte[]]@())
     Set-TestValue ($fileExts + '\.openonly\UserChoice') 'ProgId' 'Design.Keep'
     Set-TestValue ($fileExts + '\.blend\UserChoice') 'ProgId' 'Blender.Keep'
     Set-TestValue ($fileExts + '\.blend\OpenWithList') 'a' 'BaiduNetdiskUnite.exe'
@@ -182,6 +183,7 @@ try {
     Assert-Test ((Get-Item -LiteralPath ($registryRoot + '\Software\RegisteredApplications')).GetValue('OtherPlayer') -eq 'Software\OtherPlayer\Capabilities') 'Preserve other registered application'
     Assert-Test ((Get-Item -LiteralPath ($registryRoot + '\' + $toast)).GetValueNames() -notcontains ($newProgId + '_.toastonly')) 'Remove owned toast'
     Assert-Test ((Get-Item -LiteralPath ($registryRoot + '\' + $classes + '\.openonly\OpenWithProgids')).GetValueNames() -contains 'Other.Keep') 'Preserve unrelated OpenWithProgID'
+    Assert-Test ((Get-Item -LiteralPath ($registryRoot + '\' + $classes + '\.openonly\OpenWithProgids')).GetValueNames() -notcontains 'Applications\BaiduNetdiskPlayer.open') 'Remove empty binary OpenWith value'
     $processes = @()
     $logCount = $logs.Count
     Invoke-Repair -RepairImage $true -RepairVideo $true
