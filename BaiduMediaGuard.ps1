@@ -587,9 +587,23 @@ function Invoke-Repair {
 
     $videoToRepair = @()
     if ($RepairVideo) {
+        $declaredVideoExtensions = @($KnownVideoExtensions + @(
+            foreach ($application in $BaiduVideoApplications) {
+                Get-CapabilityExtensions -Path ('HKCU:\Software\Baidu\' + $application + '\Capabilities\FileAssociations')
+            }
+        ))
         $videoToRepair = @(
             $videoExtensions | Where-Object {
-                (Get-CurrentProgId -Extension $_) -ne $player.ProgId
+                $current = Get-CurrentProgId -Extension $_
+                $fallback = $null
+                if (-not $current) {
+                    $key = Get-Item -LiteralPath ('HKCU:\Software\Classes\' + $_) -ErrorAction SilentlyContinue
+                    if ($null -ne $key) { $fallback = $key.GetValue('') }
+                }
+                # OpenWith/MRU history alone is not evidence that the default
+                # was hijacked: nonmedia files may have been opened by Netdisk.
+                $eligible = $_ -in $declaredVideoExtensions -or $current -in $BaiduVideoProgIds -or $fallback -in $BaiduVideoProgIds
+                $eligible -and $current -ne $player.ProgId
             }
         )
     }

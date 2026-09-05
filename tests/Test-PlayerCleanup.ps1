@@ -120,6 +120,11 @@ try {
     Set-TestValue ($classes + '\.fallback') 'PerceivedType' 'video'
     Set-TestValue ($classes + '\.openonly\OpenWithProgids') $newProgId ''
     Set-TestValue ($classes + '\.openonly\OpenWithProgids') 'Other.Keep' ''
+    Set-TestValue ($fileExts + '\.openonly\UserChoice') 'ProgId' 'Design.Keep'
+    Set-TestValue ($fileExts + '\.blend\UserChoice') 'ProgId' 'Blender.Keep'
+    Set-TestValue ($fileExts + '\.blend\OpenWithList') 'a' 'BaiduNetdiskUnite.exe'
+    Set-TestValue ($fileExts + '\.blend\OpenWithList') 'b' 'blender.exe'
+    Set-TestValue ($fileExts + '\.blend\OpenWithList') 'MRUList' 'ba'
     Set-TestValue ($fileExts + '\.listonly\OpenWithList') 'a' 'BaiduNetdiskPlayer.open'
     Set-TestValue ($fileExts + '\.listonly\OpenWithList') 'b' 'Other.exe'
     Set-TestValue ($fileExts + '\.listonly\OpenWithList') 'MRUList' 'ba'
@@ -144,9 +149,14 @@ try {
         [pscustomobject]@{ ProcessId = 9; ExecutablePath = (Join-Path $appDataImage 'BaiduNetdiskImageViewer.exe'); CommandLine = '' }
     )
     Invoke-Repair -RepairImage $true -RepairVideo $true
-    foreach ($extension in @($extensions | Sort-Object -Unique)) {
+    foreach ($extension in @($extensions | Sort-Object -Unique | Where-Object { $_ -notin @('.openonly', '.listonly', '.subkeyonly', '.toastonly', '.blend') })) {
         Assert-Test ((Get-CurrentProgId $extension) -eq $fixturePlayer.ProgId) ('Restored ' + $extension)
     }
+    foreach ($extension in @('.listonly', '.subkeyonly', '.toastonly')) {
+        Assert-Test (-not (Get-CurrentProgId $extension)) ('History alone does not establish a default: ' + $extension)
+    }
+    Assert-Test ((Get-CurrentProgId '.blend') -eq 'Blender.Keep') 'Preserve Blender despite old Netdisk OpenWith history'
+    Assert-Test ((Get-CurrentProgId '.openonly') -eq 'Design.Keep') 'Preserve nonmedia default despite new player OpenWith entry'
     Assert-Test ((Get-CurrentProgId '.mp3') -eq 'Audio.Keep') 'Preserve audio default'
     Assert-Test ((Get-CurrentProgId '.unrelated') -eq 'BaiduOtherAssociations') 'Do not treat unrelated Baidu identity as a player'
     Assert-Test ((Get-Item -LiteralPath ($registryRoot + '\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice')).GetValue('ProgId') -eq 'Browser.Keep') 'Preserve URL default'
